@@ -11,6 +11,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,14 +28,8 @@ jobs:
       - name: Install dependencies (ImageMagick, jq, unzip, curl)
         run: sudo apt-get update && sudo apt-get install -y imagemagick jq unzip curl
 
-      - name: Install Gradle
-        run: |
-          curl -s "https://get.sdkman.io" | bash
-          source "$HOME/.sdkman/bin/sdkman-init.sh"
-          sdk install gradle 8.9
-          sdk use gradle 8.9
-          gradle --version
-
+      # Dipindah ke atas "Install Gradle" supaya env.type sudah siap dipakai
+      # buat nge-skip step yang gak perlu (percepat build).
       - name: Read build config
         id: config
         run: |
@@ -47,6 +42,18 @@ jobs:
           else
             echo "type=unknown" >> $GITHUB_ENV
           fi
+
+      # 🚀 Cuma dipakai jalur web2apk (gradle manual). Flutter pakai gradle
+      # wrapper bawaan project sendiri, jadi step ini di-skip buat flutter —
+      # hemat ±1-2 menit tiap build.
+      - name: Install Gradle
+        if: env.type == 'web2apk'
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install gradle 8.9
+          sdk use gradle 8.9
+          gradle --version
 
       - name: Generate keystore for signing (all builds)
         run: |
@@ -609,8 +616,33 @@ jobs:
           channel: stable
           cache: true
 
+      # 🚀 Cache dependency Gradle (AGP, Kotlin stdlib, androidx, dll) lintas
+      # build. Key dikunci ke versi Flutter biar gak nyampur cache antar versi.
+      - name: Cache Gradle packages
+        if: env.type == 'flutter'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ env.FLUTTER_VERSION }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # 🚀 Cache package pub Flutter (dari pub.dev), lumayan gede pengaruhnya
+      # ke kecepatan "flutter pub get" kalau project pakai dependency umum.
+      - name: Cache Pub packages
+        if: env.type == 'flutter'
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: pub-${{ runner.os }}-${{ env.FLUTTER_VERSION }}
+          restore-keys: |
+            pub-${{ runner.os }}-
+
       - name: Build Flutter APK with auto-detection and auto-fix
         if: env.type == 'flutter'
+        timeout-minutes: 22
         shell: bash
         run: |
           set -e
@@ -619,6 +651,18 @@ jobs:
           echo "=== Flutter Version ==="
           flutter --version
           echo "========================"
+
+          # 🚀 Tuning Gradle: parallel build, caching, daemon, heap lebih
+          # besar. Ini yang paling kerasa mempercepat proses compile APK.
+          mkdir -p android
+          cat >> android/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx4096m -XX:+UseParallelGC
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          org.gradle.configureondemand=true
+          org.gradle.daemon=true
+          kotlin.incremental=true
+          EOF
 
           PUB_LOG="../pubget.log"
           BUILD_MODE="${{ env.build_type }}"
@@ -633,8 +677,11 @@ jobs:
           }
 
           # Function to detect and fix issues
+          # (FIXED sengaja bukan "local" — dibaca di main loop buat nentuin
+          # apakah masih worth di-retry atau langsung berhenti)
+          FIXED=false
           auto_fix_pubspec() {
-            local FIXED=false
+            FIXED=false
 
             echo "=== Auto-fixing pubspec.yaml ==="
 
@@ -726,6 +773,11 @@ jobs:
             fi
           }
 
+          # 🚀 Batasi target ABI ke arm & arm64 (HP Android modern semua pakai
+          # ini). x86_64 cuma kepake buat emulator, jadi di-skip biar compile
+          # native lebih cepat & APK lebih kecil.
+          ABI_FLAGS="--target-platform android-arm,android-arm64"
+
           # Main build loop with retries
           while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = false ]; do
             RETRY_COUNT=$((RETRY_COUNT + 1))
@@ -737,29 +789,41 @@ jobs:
 
               # Try build
               if [ "$BUILD_MODE" = "release" ]; then
-                if flutter build apk --release; then
+                if flutter build apk --release $ABI_FLAGS; then
                   SUCCESS=true
                   echo "✅ Build successful!"
                   break
                 else
                   echo "❌ Build failed, attempting to fix..."
                   auto_fix_pubspec
+                  if [ "$FIXED" = false ]; then
+                    echo "🛑 Gak ada auto-fix yang cocok buat error ini (kemungkinan bug asli di kode project, bukan soal versi dependency). Stop retry, langsung tampilkan log asli — daripada ngulang $((MAX_RETRIES - RETRY_COUNT)) kali lagi buat error yang sama persis."
+                    break
+                  fi
                   rm -rf build .dart_tool
                 fi
               else
-                if flutter build apk --debug; then
+                if flutter build apk --debug $ABI_FLAGS; then
                   SUCCESS=true
                   echo "✅ Build successful!"
                   break
                 else
                   echo "❌ Build failed, attempting to fix..."
                   auto_fix_pubspec
+                  if [ "$FIXED" = false ]; then
+                    echo "🛑 Gak ada auto-fix yang cocok buat error ini. Stop retry, langsung tampilkan log asli."
+                    break
+                  fi
                   rm -rf build .dart_tool
                 fi
               fi
             else
               echo "❌ flutter pub get failed, attempting to fix..."
               auto_fix_pubspec
+              if [ "$FIXED" = false ]; then
+                echo "🛑 Gak ada auto-fix yang cocok buat error 'pub get' ini. Stop retry, langsung tampilkan log asli."
+                break
+              fi
               rm -f pubspec.lock
             fi
           done
