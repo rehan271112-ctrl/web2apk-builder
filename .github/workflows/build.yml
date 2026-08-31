@@ -507,6 +507,42 @@ jobs:
             exit 1
           fi
 
+      # 🔧 Fix AAPT2 "file failed to compile" pada mipmap/ic_launcher.png.
+      # AAPT2 (Android modern) strict soal format PNG (color profile aneh,
+      # bit-depth non-standar, atau file kena korup pas zip). Re-encode semua
+      # PNG icon ke 32-bit RGBA bersih. Kalau ada yang beneran corrupt/bukan
+      # gambar valid, generate ulang fallback icon biar build tetap jalan.
+      - name: Sanitize Flutter app icons (fix AAPT2 compile crash)
+        if: env.type == 'flutter'
+        shell: bash
+        run: |
+          set +e
+          RES_DIR="flutter-project/android/app/src/main/res"
+          if [ -d "$RES_DIR" ]; then
+            echo "=== Sanitizing launcher icon PNGs ==="
+            declare -A DPI_SIZE=( [mipmap-mdpi]=48 [mipmap-hdpi]=72 [mipmap-xhdpi]=96 [mipmap-xxhdpi]=144 [mipmap-xxxhdpi]=192 )
+            for DIR in "$RES_DIR"/mipmap-*; do
+              [ -d "$DIR" ] || continue
+              DIRNAME=$(basename "$DIR")
+              SIZE=${DPI_SIZE[$DIRNAME]:-96}
+              for IMG in "$DIR"/*.png; do
+                [ -f "$IMG" ] || continue
+                if identify "$IMG" >/dev/null 2>&1; then
+                  convert "$IMG" -strip "PNG32:${IMG}.tmp" 2>/dev/null && mv "${IMG}.tmp" "$IMG" \
+                    && echo "✅ Re-encoded: $IMG" \
+                    || echo "⚠️ Gagal re-encode $IMG, dibiarkan apa adanya"
+                else
+                  echo "⚠️ $IMG bukan gambar valid (corrupt), generate fallback ${SIZE}x${SIZE}"
+                  convert -size ${SIZE}x${SIZE} xc:"#2196F3" "PNG32:$IMG"
+                fi
+              done
+            done
+            echo "=== Selesai sanitize icon ==="
+          else
+            echo "Folder res mipmap tidak ditemukan, skip sanitize icon"
+          fi
+          set -e
+
       - name: Detect Flutter version from pubspec
         if: env.type == 'flutter'
         id: flutter_detect
