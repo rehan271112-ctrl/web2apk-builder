@@ -24,17 +24,6 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          # PENTING (15 Sep 2026): Google berhenti nyediain package "tools"
-          # yang lama. Default action ini masih minta "tools" duluan sebelum
-          # package lain, jadi sdkmanager exit 1 dan SEMUA package (termasuk
-          # platform-tools & build-tools) gagal ke-install, bikin step ini
-          # gagal total sebelum Gradle sempat jalan. Fix: batasi cuma minta
-          # platform-tools; Gradle/Android Gradle Plugin bakal auto-download
-          # build-tools & platform yang tepat sesuai compileSdkVersion pas
-          # proses build, asal license SDK-nya udah diterima (default: true).
-          packages: 'platform-tools'
-          accept-android-sdk-licenses: true
 
       - name: Install dependencies (ImageMagick, jq, unzip, curl)
         run: sudo apt-get update && sudo apt-get install -y imagemagick jq unzip curl
