@@ -33,24 +33,12 @@ jobs:
       - name: Read build config
         id: config
         run: |
-          # Dua layout didukung: root (build-config.json) ATAU layout uploads/
-          # yang dipakai lib/github.js (uploads/<ts>_config.json +
-          # uploads/<ts>_build.zip) — yang dipakai = config TERBARU.
-          CFG=""
           if [ -f build-config.json ]; then
-            CFG="build-config.json"
-          else
-            CFG=$(ls -1 uploads/*_config.json 2>/dev/null | sort | tail -n 1)
-          fi
-
-          if [ -n "$CFG" ] && [ -f "$CFG" ]; then
-            echo "cfg_path=$CFG" >> $GITHUB_ENV
-            echo "type=$(jq -r '.type // "flutter"' "$CFG")" >> $GITHUB_ENV
-            echo "url=$(jq -r '.url // ""' "$CFG")" >> $GITHUB_ENV
-            echo "app_name=$(jq -r '.app_name // "app"' "$CFG")" >> $GITHUB_ENV
-            echo "build_type=$(jq -r '.build_type // "release"' "$CFG")" >> $GITHUB_ENV
-            echo "asset_url=$(jq -r '.asset_url // ""' "$CFG")" >> $GITHUB_ENV
-            cat "$CFG"
+            echo "type=$(jq -r .type build-config.json)" >> $GITHUB_ENV
+            echo "url=$(jq -r .url build-config.json)" >> $GITHUB_ENV
+            echo "app_name=$(jq -r .app_name build-config.json)" >> $GITHUB_ENV
+            echo "build_type=$(jq -r .build_type build-config.json)" >> $GITHUB_ENV
+            cat build-config.json
           else
             echo "type=unknown" >> $GITHUB_ENV
           fi
@@ -494,28 +482,6 @@ jobs:
           else
             echo "APK Web2APK tidak ditemukan, skip signing"
           fi
-
-      # ZIP project bisa datang dari 3 tempat: release asset (ZIP besar —
-      # asset_url di config), flutter-project.zip di root repo, atau
-      # uploads/<ts>_build.zip (jalur Vinz, pasangan dari uploads/<ts>_config.json).
-      - name: Fetch project ZIP
-        if: env.type == 'flutter'
-        run: |
-          if [ -n "$asset_url" ]; then
-            echo "Mengunduh flutter-project.zip dari release asset..."
-            curl -fL --retry 3 --retry-delay 5 \
-              -H "Authorization: Bearer ${{ github.token }}" \
-              -H "Accept: application/octet-stream" \
-              "$asset_url" -o flutter-project.zip
-          elif [ -f flutter-project.zip ]; then
-            echo "flutter-project.zip sudah ada di root repo."
-          elif [ -n "$cfg_path" ] && [ -f "${cfg_path%_config.json}_build.zip" ]; then
-            cp "${cfg_path%_config.json}_build.zip" flutter-project.zip
-          else
-            echo "ZIP project tidak ditemukan (asset_url kosong, tidak ada flutter-project.zip / uploads/*_build.zip)"
-            exit 1
-          fi
-          ls -lh flutter-project.zip
 
       - name: Prepare Flutter project
         if: env.type == 'flutter'
