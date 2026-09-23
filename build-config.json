@@ -1,4 +1,7 @@
 {
-  "timestamp": 1790171248499,
-  "chatId": "7622073081"
+  "timestamp": 1790171574463,
+  "chatId": "7622073081",
+  "type": "flutter",
+  "app_name": "ZeroTyz",
+  "build_type": "release"
 }
