@@ -701,15 +701,10 @@ jobs:
           EOF
 
           PUB_LOG="../pubget.log"
-          BUILD_MODE="${build_type}"
+          BUILD_MODE="${{ env.build_type }}"
           MAX_RETRIES=5
           RETRY_COUNT=0
           SUCCESS=false
-          
-          echo "🔍 Build Configuration:"
-          echo "  - Type: ${type}"
-          echo "  - Build Mode: ${BUILD_MODE}"
-          echo "  - URL: ${url}"
 
           # Function to try flutter pub get
           try_pub_get() {
@@ -822,74 +817,58 @@ jobs:
           # Main build loop with retries
           while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = false ]; do
             RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo ""
-            echo "╔════════════════════════════════════════════════════════╗"
-            echo "║  Build Attempt: $RETRY_COUNT / $MAX_RETRIES"
-            echo "║  Mode: ${BUILD_MODE:-debug}"
-            echo "╚════════════════════════════════════════════════════════╝"
+            echo "=== Attempt $RETRY_COUNT of $MAX_RETRIES ==="
 
             # Try flutter pub get
             if try_pub_get; then
               echo "✅ flutter pub get succeeded"
 
               # Try build
-              BUILD_CMD="flutter build apk"
-              [ "$BUILD_MODE" = "release" ] && BUILD_CMD="$BUILD_CMD --release" || BUILD_CMD="$BUILD_CMD --debug"
-              BUILD_CMD="$BUILD_CMD $ABI_FLAGS"
-
-              echo "🚀 Running: $BUILD_CMD"
-              BUILD_LOG="build_attempt_$RETRY_COUNT.log"
-              
-              if $BUILD_CMD 2>&1 | tee "$BUILD_LOG"; then
-                SUCCESS=true
-                echo "✅ Build successful! APK has been created."
-                break
-              else
-                echo "❌ Build failed on attempt $RETRY_COUNT"
-                auto_fix_pubspec
-                if [ "$FIXED" = false ]; then
-                  echo ""
-                  echo "🛑 No suitable auto-fixes found for this error."
-                  echo "⚠️  This might be a real issue in your project code, not a dependency version problem."
-                  echo ""
-                  echo "📋 Last 50 lines of build output:"
-                  echo "────────────────────────────────────────────────"
-                  tail -50 "$BUILD_LOG"
-                  echo "────────────────────────────────────────────────"
-                  echo ""
-                  echo "⏹️  Stopping retry attempts to save time."
+              if [ "$BUILD_MODE" = "release" ]; then
+                if flutter build apk --release $ABI_FLAGS; then
+                  SUCCESS=true
+                  echo "✅ Build successful!"
                   break
+                else
+                  echo "❌ Build failed, attempting to fix..."
+                  auto_fix_pubspec
+                  if [ "$FIXED" = false ]; then
+                    echo "🛑 Gak ada auto-fix yang cocok buat error ini (kemungkinan bug asli di kode project, bukan soal versi dependency). Stop retry, langsung tampilkan log asli — daripada ngulang $((MAX_RETRIES - RETRY_COUNT)) kali lagi buat error yang sama persis."
+                    break
+                  fi
+                  rm -rf build .dart_tool
                 fi
-                echo "🔄 Retrying after pubspec fixes..."
-                rm -rf build .dart_tool flutter-project/build flutter-project/.dart_tool 2>/dev/null || true
+              else
+                if flutter build apk --debug $ABI_FLAGS; then
+                  SUCCESS=true
+                  echo "✅ Build successful!"
+                  break
+                else
+                  echo "❌ Build failed, attempting to fix..."
+                  auto_fix_pubspec
+                  if [ "$FIXED" = false ]; then
+                    echo "🛑 Gak ada auto-fix yang cocok buat error ini. Stop retry, langsung tampilkan log asli."
+                    break
+                  fi
+                  rm -rf build .dart_tool
+                fi
               fi
             else
-              echo "❌ flutter pub get failed on attempt $RETRY_COUNT"
+              echo "❌ flutter pub get failed, attempting to fix..."
               auto_fix_pubspec
               if [ "$FIXED" = false ]; then
-                echo ""
-                echo "🛑 Cannot auto-fix 'flutter pub get' error. Showing log:"
-                echo "────────────────────────────────────────────────"
-                tail -50 "$PUB_LOG"
-                echo "────────────────────────────────────────────────"
+                echo "🛑 Gak ada auto-fix yang cocok buat error 'pub get' ini. Stop retry, langsung tampilkan log asli."
                 break
               fi
-              echo "🔄 Retrying after pubspec fixes..."
-              rm -f pubspec.lock flutter-project/pubspec.lock 2>/dev/null || true
+              rm -f pubspec.lock
             fi
           done
 
           if [ "$SUCCESS" = false ]; then
-            echo ""
-            echo "╔════════════════════════════════════════════════════════╗"
-            echo "║  ❌ BUILD FAILED AFTER $MAX_RETRIES ATTEMPTS"
-            echo "╚════════════════════════════════════════════════════════╝"
+            echo "❌ Build failed after $MAX_RETRIES attempts"
+            echo "Last pub get output:"
+            cat "$PUB_LOG" || true
             exit 1
-          else
-            echo ""
-            echo "╔════════════════════════════════════════════════════════╗"
-            echo "║  ✅ BUILD COMPLETED SUCCESSFULLY"
-            echo "╚════════════════════════════════════════════════════════╝"
           fi
 
       - name: Sign Flutter APK (only release)
